@@ -189,5 +189,94 @@ class HAINT_cell(tf.keras.layers.Layer):
         new_h = self.IM(input, g, _h)
         return new_h, new_c
 
+class T_cell(tf.keras.layers.Layer):
+    def __init__(self, hidden_dim, time_interval, **kwargs):
+        super().__init__( **kwargs)
+        self.hidden_dim = hidden_dim
+        if time_interval not in [1, 2, 3]:
+          raise ValueError("time_interval must be in [1, 2, 3].")
+        self.it = time_interval
+
+    def build(self, input_shape):
+        self.W_xt1 = self.add_weight(name='Wxt1', shape=(input_shape[-1], self.hidden_dim), initializer="random_uniform", trainable=True)
+        self.bt1 = self.add_weight(name='bt1', shape=(1, self.hidden_dim), initializer="random_uniform", trainable=True)
+        
+        if self.it == 1:
+          self.W_t1 = self.add_weight(name='Wt1', shape=(1, self.hidden_dim), initializer="random_uniform", trainable=True)
+        else:
+          self.W_t1 = self.add_weight(name='Wt1', shape=(1, self.hidden_dim), initializer="random_uniform", trainable=True, constraint=LessThanConstraint(max_value=0.0))
+          self.W_xt2 = self.add_weight(name='Wxt2', shape=(input_shape[-1], self.hidden_dim), initializer="random_uniform", trainable=True)
+          self.W_t2 = self.add_weight(name='Wt2', shape=(1, self.hidden_dim), initializer="random_uniform", trainable=True)
+          self.bt2 = self.add_weight(name='bt2', shape=(1, self.hidden_dim), initializer="random_uniform", trainable=True)
+        
+        if self.it != 3:
+          self.W_fh = self.add_weight(name='Wfh', shape=(self.hidden_dim, self.hidden_dim), initializer="random_uniform", trainable=True)
+          self.W_fx = self.add_weight(name='Wfx', shape=(input_shape[-1], self.hidden_dim), initializer="random_uniform", trainable=True)
+          self.W_fc = self.add_weight(name='Wft', shape=(1, self.hidden_dim), initializer="random_uniform", trainable=True)
+          self.bf = self.add_weight(name='bf', shape=(1, self.hidden_dim), initializer="random_uniform", trainable=True)
+
+        self.W_ih = self.add_weight(name='Wih', shape=(self.hidden_dim, self.hidden_dim), initializer="random_uniform", trainable=True)
+        self.W_ix = self.add_weight(name='Wix', shape=(input_shape[-1], self.hidden_dim), initializer="random_uniform", trainable=True)
+        self.W_ic = self.add_weight(name='Wic', shape=(1, self.hidden_dim), initializer="random_uniform", trainable=True)
+        self.bi = self.add_weight(name='bi', shape=(1, self.hidden_dim), initializer="random_uniform", trainable=True)
+
+        self.W_oh = self.add_weight(name='Woh', shape=(self.hidden_dim, self.hidden_dim), initializer="random_uniform", trainable=True)
+        self.W_ox = self.add_weight(name='Wox', shape=(input_shape[-1], self.hidden_dim), initializer="random_uniform", trainable=True)
+        self.W_ot = self.add_weight(name='Wot', shape=(1, self.hidden_dim), initializer="random_uniform", trainable=True)
+        self.W_oc = self.add_weight(name='Woc', shape=(1, self.hidden_dim), initializer="random_uniform", trainable=True)
+        self.bo = self.add_weight(name='bo', shape=(1, self.hidden_dim), initializer="random_uniform", trainable=True)
+
+        self.W_ch = self.add_weight(name='Wch', shape=(self.hidden_dim, self.hidden_dim), initializer="random_uniform", trainable=True)
+        self.W_cx = self.add_weight(name='Wcx', shape=(input_shape[-1], self.hidden_dim), initializer="random_uniform", trainable=True)
+        self.bc = self.add_weight(name='bo', shape=(1, self.hidden_dim), initializer="random_uniform", trainable=True)
+        return super().build(input_shape)
+    
+    def call(self, input, h_prev, c_prev, delta_t):
+        xt1 = tf.matmul(input, self.W_xt1)
+        t1 = tf.matmul(delta_t, self.W_t1)
+        t1 = tf.sigmoid(t1)
+        T1 = tf.sigmoid(xt1 + t1 + self.bt1)
+
+        if self.it != 1:
+          xt2 = tf.matmul(input, self.W_xt2)
+          t2 = tf.matmul(delta_t, self.W_t2)
+          t2 = tf.sigmoid(t2)
+          T2 = tf.sigmoid(xt2 + t2 + self.bt2)
+
+        if self.it != 3:
+          fh = tf.matmul(h_prev, self.W_fh)
+          fx = tf.matmul(input, self.W_fx)
+          fc = c_prev * self.W_fc
+
+          f = tf.sigmoid(fh + fx  + fc + self.bf)
+
+        ih = tf.matmul(h_prev, self.W_ih)
+        ix = tf.matmul(input, self.W_ix)
+        ic = c_prev * self.W_ic
+
+        i = tf.sigmoid(ih + ix + ic + self.bi)
+
+        _ch = tf.matmul(h_prev, self.W_ch)
+        _cx = tf.matmul(input, self.W_cx)
+        _c = tf.sigmoid(_ch + _cx + self.bc)
+        if self.it == 3:
+          new_c =  (1 - i * T1) * c_prev + i * _c * T1
+          _new_c = (1 - i) * c_prev + i * _c * T2
+        else:
+          new_c =  f * c_prev + i * _c * T1
+          if self.it != 1:
+            _new_c = f * c_prev + i * _c * T2
+
+        oh = tf.matmul(h_prev, self.W_oh)
+        ox = tf.matmul(input, self.W_ox)
+        ot = tf.matmul(delta_t, self.W_ot)
+        oc = new_c * self.W_oc
+
+        o = tf.sigmoid(oh + ox + oc + ot + self.bo)
+        new_h = o * tf.sigmoid(new_c)
+        if self.it != 1:
+          return new_h, _new_c
+        return new_h, new_c
+
 
 

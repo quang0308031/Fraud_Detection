@@ -1,24 +1,34 @@
 import tensorflow as tf
 from .component.cells import TH_cell
 from .component.cells import UGRNNCell
+from .component.cells import T_cell
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .component.cells import HAINT_cell
 
+def forward(dropout, num_classes):
+    return tf.keras.Sequential(
+    [
+        tf.keras.layers.Dropout(dropout),
+        tf.keras.layers.Dense(256, activation='relu'),
+        tf.keras.layers.Dense(32, activation='relu'),
+        tf.keras.layers.Dense(num_classes, activation='softmax')
+    ]
+)
+
 @tf.keras.saving.register_keras_serializable()
 class TH_LSTM(tf.keras.Model):
-    def __init__(self, hidden_dim, output_dim, d,*args, **kwargs):
+    def __init__(self, hidden_dim, num_classes, d, dropout = 0.5, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.hidden_dim = hidden_dim
-        self.output_dim = output_dim
         self.d = d
+        self.forward = forward(dropout=dropout, num_classes=num_classes)
 
     def build(self, input_shape):
         self.hc_init = self.add_weight(name='h_init', shape = (1, self.hidden_dim), initializer='zeros')
         self.cell = TH_cell(self.hidden_dim, self.d)
-        self.output_dense = self.add_weight(name='op', shape = (self.hidden_dim, self.output_dim), initializer="random_uniform", trainable=True)
         self._init = self.add_weight(name='init', shape = (input_shape[-1], self.hidden_dim), initializer="random_uniform", trainable=True)
         return super().build(input_shape)
 
@@ -30,12 +40,13 @@ class TH_LSTM(tf.keras.Model):
         for i in range(inputs.shape[1]):
             h, c = self.cell(inputs[:,i,..., 1:], h, c, inputs[:, i,... ,0:1], str_mem)
             str_mem = tf.concat((str_mem, h[:, tf.newaxis, ...]), axis = 1)[:,-self.d:,...]
-        output = tf.matmul(h, self.output_dense)
+
+        output = self.forward(h)
         return output
     
 @tf.keras.saving.register_keras_serializable()
 class A_CNN(tf.keras.Model):
-    def __init__(self,num_classes,filters, merge_units, dropout, head, *args, **kwargs):
+    def __init__(self,num_classes,filters, merge_units, head, dropout = 0.5, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.head = head
         self.CNN_blocks = [
@@ -52,12 +63,8 @@ class A_CNN(tf.keras.Model):
                 ]
             )
         for i in range(head)]
-        self.forward = tf.keras.Sequential(
-            [
-                tf.keras.layers.Dense(merge_units, activation='relu'),
-                tf.keras.layers.Dense(num_classes, activation='softmax')
-            ]
-        )
+        self.merge_layers = tf.keras.layers.Dense(merge_units, activation='relu')
+        self.forward = forward(dropout=dropout, num_classes=num_classes)
 
     def call(self, inputs):
         _dense_output = []
@@ -65,7 +72,8 @@ class A_CNN(tf.keras.Model):
             otp = self.CNN_blocks[i](inputs)
             _dense_output.append(otp)
         _dense_output = tf.concat(_dense_output, axis=-1)
-        output = self.forward(_dense_output)
+        output = self.merge_layers(_dense_output)
+        output = self.forward(output)
         return output
     
 class stan_2d_model(nn.Module):
@@ -119,6 +127,7 @@ class stan_2d_model(nn.Module):
         # FC layer
         self.flatten = nn.Flatten()
         self.linears = nn.Sequential(
+            nn.Dropout(0.5),
             nn.LazyLinear(256),
             nn.ReLU(),
             nn.LazyLinear(32),
@@ -205,12 +214,12 @@ class stan_2d_model(nn.Module):
     
 @tf.keras.saving.register_keras_serializable()
 class UGRNNModel(tf.keras.Model):
-    def __init__(self, units, num_steps, output_dim, **kwargs):
+    def __init__(self, units, num_steps, num_classes, dropout = 0.5, **kwargs):
         super(UGRNNModel, self).__init__(**kwargs)
         self.units = units
         self.num_steps = num_steps
-
-        self._dense_output = tf.keras.layers.Dense(output_dim, activation='relu')
+        self.fl = tf.keras.layers.Flatten()
+        self.forward = forward(dropout=dropout, num_classes=num_classes)
 
     def build(self, input_shape):
         self.ugrnn_cell = UGRNNCell(self.units)
@@ -229,21 +238,21 @@ class UGRNNModel(tf.keras.Model):
         for i in range(self.num_steps):
             node_states, edge_features = self.ugrnn_cell((node_states, neighbour_states, edge_features))
 
-        output = self._dense_output(node_states)
+        output = self.fl(node_states)
+        output = self.forward(output)
         return output
 
 @tf.keras.saving.register_keras_serializable()
 class HAINT_LSTM(tf.keras.Model):
-    def __init__(self, hidden_dim, output_dim, d,*args, **kwargs):
+    def __init__(self, hidden_dim, num_classes, d, dropout=0.5,*args, **kwargs):
         super().__init__(*args, **kwargs)
         self.hidden_dim = hidden_dim
-        self.output_dim = output_dim
         self.d = d
+        self.forward = forward(dropout=dropout, num_classes=num_classes)
 
     def build(self, input_shape):
         self.hc_init = self.add_weight(name='h_init', shape = (1, self.hidden_dim), initializer='zeros')
         self.cell = HAINT_cell(self.hidden_dim, self.d)
-        self.output_dense = self.add_weight(name='op', shape = (self.hidden_dim, self.output_dim), initializer="random_uniform", trainable=True)
         self._init = self.add_weight(name='init', shape = (input_shape[-1], self.hidden_dim), initializer="random_uniform", trainable=True)
         return super().build(input_shape)
 
@@ -255,7 +264,7 @@ class HAINT_LSTM(tf.keras.Model):
         for i in range(inputs.shape[1]):
             h, c = self.cell(inputs[:,i,..., 1:], h, c, inputs[:, i,... ,0:1], str_mem)
             str_mem = tf.concat((str_mem, h[:, tf.newaxis, ...]), axis = 1)[:,-self.d:,...]
-        output = tf.matmul(h, self.output_dense)
+        output = self.forward(h)
         return output
 
 @tf.keras.saving.register_keras_serializable()
@@ -274,12 +283,8 @@ class A_RNN(tf.keras.Model):
                 ]
             )
         for i in range(head)]
-        self.forward = tf.keras.Sequential(
-            [
-                tf.keras.layers.Dense(merge_units, activation='relu'),
-                tf.keras.layers.Dense(num_classes, activation='softmax')
-            ]
-        )
+        self.merge_layers = tf.keras.layers.Dense(merge_units, activation='relu')
+        self.forward = forward(dropout=dropout, num_classes=num_classes)
 
     def call(self, inputs):
         _dense_output = []
@@ -287,5 +292,26 @@ class A_RNN(tf.keras.Model):
             otp = self.LSTM_blocks[i](inputs)
             _dense_output.append(otp)
         _dense_output = tf.concat(_dense_output, axis=-1)
-        output = self.forward(_dense_output)
+        output = self.merge_layers(_dense_output)
+        output = self.forward(output)
+        return output
+
+@tf.keras.saving.register_keras_serializable()
+class T_LSTM(tf.keras.Model):
+    def __init__(self, hidden_dim, num_classes, time_interval = 1, dropout=0.5, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.hidden_dim = hidden_dim
+        self.it = time_interval
+        self.forward = forward(dropout=dropout, num_classes=num_classes)
+
+    def build(self, input_shape):
+        self.hc_init = self.add_weight(name='h_init', shape = (1, self.hidden_dim), initializer='zeros')
+        self.cell = T_cell(self.hidden_dim, self.it)
+        return super().build(input_shape)
+
+    def call(self, inputs):
+        h = c = self.hc_init
+        for i in range(inputs.shape[1]):
+            h, c = self.cell(inputs[:,i,..., 1:], h, c, inputs[:, i,... ,0:1])
+        output = self.forward(h)
         return output
